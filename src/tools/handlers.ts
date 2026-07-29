@@ -21,8 +21,8 @@ import type { AskQuestionResult, ToolResult, ProgressCallback } from "../types.j
 import { RateLimitError } from "../errors.js";
 import { CleanupManager } from "../utils/cleanup-manager.js";
 import { applyAiMarker, PROVENANCE } from "../utils/disclaimer.js";
-import { addSources } from "../notebooklm/batch-sources.js";
-import { countSources } from "../notebooklm/sources.js";
+import { addSources, buildSourceActionItems } from "../notebooklm/batch-sources.js";
+import { classifySourceFailure, countSources } from "../notebooklm/sources.js";
 import { buildStudioCompletion, type StudioDetailLevel } from "../notebooklm/studio.js";
 import type { Collection, CreateCollectionInput, UpdateCollectionInput } from "../library/types.js";
 
@@ -1209,7 +1209,20 @@ export class ToolHandlers {
       const result = await addSources(session, args.sources);
       return { success: result.succeeded === result.requested, data: result };
     } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) };
+      const message = e instanceof Error ? e.message : String(e);
+      const results = args.sources.map((source, index) => ({
+        index,
+        source,
+        error: message,
+        ...classifySourceFailure(message, source.type === "url" ? "url" : "text"),
+      }));
+      const data = {
+        requested: args.sources.length,
+        succeeded: 0,
+        results,
+        actionItems: buildSourceActionItems(results),
+      };
+      return { success: false, data, error: message };
     } finally {
       Object.assign(CONFIG, originalConfig);
     }

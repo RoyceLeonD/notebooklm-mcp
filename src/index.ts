@@ -94,6 +94,16 @@ Call \`add_source\` once per source — text snippets and URLs are supported.
 NotebookLM crawls/indexes each source asynchronously; new sources are
 typically queryable within 5–30 seconds after \`add_source\` succeeds.
 
+## Repeatable lifecycle tools
+
+Use \`list_sources\` / \`get_source\` to read the live source inventory and
+\`retry_source\` for bounded retries with action items. Source update/removal
+currently returns explicit \`unsupported\` state. Research and Studio task
+tools persist local ids beginning with \`nlm-local-\`; these are not remote
+NotebookLM task ids. Poll the corresponding \`get_*_task\` tool and trust only
+verified DOM markers. Presentation/slide-deck download is incomplete until a
+stable UI artifact selector is verified; it must never be treated as success.
+
 ## Audio Overview (async chain — important)
 
 \`generate_audio\` is **non-blocking** by default: it triggers the render
@@ -458,6 +468,21 @@ class NotebookLMMCPServer {
               }
             );
             break;
+
+          case "list_sources": result = await this.toolHandlers.handleListSources(args as { session_id?: string; notebook_id?: string; notebook_url?: string }); break;
+          case "get_source": result = await this.toolHandlers.handleGetSource(args as { index: number; session_id?: string; notebook_id?: string; notebook_url?: string }); break;
+          case "update_source": result = await this.toolHandlers.handleSourceMutation({ operation: "update" }); break;
+          case "remove_source": result = await this.toolHandlers.handleSourceMutation({ operation: "remove" }); break;
+          case "retry_source": result = await this.toolHandlers.handleRetrySource(args as { type: "url" | "text"; content: string; title?: string; session_id?: string; notebook_id?: string; notebook_url?: string }); break;
+          case "create_research_task": result = await this.toolHandlers.handleCreateResearchTask(args as { notebook_url: string; prompt: string; selected_source_titles?: string[] }); break;
+          case "get_research_task": result = await this.toolHandlers.handleGetResearchTask(args as { task_id: string }); break;
+          case "list_research_tasks": result = await this.toolHandlers.handleListResearchTasks(); break;
+          case "get_research_sources": result = await this.toolHandlers.handleGetResearchSources(args as { task_id: string }); break;
+          case "import_research_sources": result = await this.toolHandlers.handleImportResearchSources(args as { task_id: string }); break;
+          case "create_studio_task": result = await this.toolHandlers.handleCreateStudioTask(args as { notebook_url: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }); break;
+          case "get_studio_task": result = await this.toolHandlers.handleGetStudioTask(args as { task_id: string }); break;
+          case "list_studio_tasks": result = await this.toolHandlers.handleListStudioTasks(); break;
+          case "download_studio_artifact": result = await this.toolHandlers.handleDownloadStudioArtifact(args as { task_id: string; destination_dir: string }); break;
 
           default:
             log.error(`❌ [MCP] Unknown tool: ${name}`);

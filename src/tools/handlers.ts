@@ -25,6 +25,11 @@ import { addSources, buildSourceActionItems } from "../notebooklm/batch-sources.
 import { classifySourceFailure, countSources } from "../notebooklm/sources.js";
 import { buildStudioCompletion, type StudioDetailLevel } from "../notebooklm/studio.js";
 import type { Collection, CreateCollectionInput, UpdateCollectionInput } from "../library/types.js";
+import path from "path";
+import { JsonTaskRegistry } from "../notebooklm/lifecycle.js";
+import { listSources, unsupportedSourceMutation, retrySourceOperation } from "../notebooklm/source-catalog.js";
+import { createResearchTask, getResearchTask, listResearchTasks, importResearchSources } from "../notebooklm/research.js";
+import { createStudioTask, getStudioTask, listStudioTasks, downloadStudioArtifact } from "../notebooklm/studio-lifecycle.js";
 
 /**
  * Follow-up reminder appended to ask_question answers when explicitly enabled.
@@ -49,11 +54,13 @@ export class ToolHandlers {
   private sessionManager: SessionManager;
   private authManager: AuthManager;
   private library: NotebookLibrary;
+  private lifecycleRegistry: JsonTaskRegistry;
 
   constructor(sessionManager: SessionManager, authManager: AuthManager, library: NotebookLibrary) {
     this.sessionManager = sessionManager;
     this.authManager = authManager;
     this.library = library;
+    this.lifecycleRegistry = new JsonTaskRegistry(path.join(CONFIG.dataDir, "lifecycle-tasks.json"));
   }
 
   /**
@@ -1110,6 +1117,57 @@ export class ToolHandlers {
       Object.assign(CONFIG, originalConfig);
     }
   }
+
+  async handleListSources(args: { session_id?: string; notebook_id?: string; notebook_url?: string }): Promise<ToolResult<unknown>> {
+    try {
+      const session = await this.sessionManager.getOrCreateSession(args.session_id, await this.resolveNotebookUrl(args.notebook_id, args.notebook_url));
+      const sources = await listSources(session.getPage()!);
+      return { success: true, data: { sources, count: sources.length } };
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+  }
+
+  async handleGetSource(args: { index: number; session_id?: string; notebook_id?: string; notebook_url?: string }): Promise<ToolResult<unknown>> {
+    const result = await this.handleListSources(args);
+    if (!result.success || !result.data) return result;
+    const source = (result.data as { sources: unknown[] }).sources[args.index];
+    return source ? { success: true, data: { source } } : { success: false, error: `Source not found at index ${args.index}` };
+  }
+
+  async handleSourceMutation(args: { operation: "update" | "remove" }): Promise<ToolResult<unknown>> {
+    const result = unsupportedSourceMutation(args.operation);
+    return { success: false, data: result, error: result.message };
+  }
+
+  async handleRetrySource(args: { type: "url" | "text"; content: string; title?: string; session_id?: string; notebook_id?: string; notebook_url?: string }): Promise<ToolResult<unknown>> {
+    try {
+      const session = await this.sessionManager.getOrCreateSession(args.session_id, await this.resolveNotebookUrl(args.notebook_id, args.notebook_url));
+      const result = await retrySourceOperation(() => session.addSource({ type: args.type, content: args.content, title: args.title }));
+      return { success: result.success, data: result };
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+  }
+
+  async handleCreateResearchTask(args: { notebook_url: string; prompt: string; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
+    const task = await createResearchTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, prompt: args.prompt, selectedSourceTitles: args.selected_source_titles });
+    return { success: true, data: task };
+  }
+  async handleGetResearchTask(args: { task_id: string }): Promise<ToolResult<unknown>> {
+    const task = await getResearchTask(this.lifecycleRegistry, args.task_id);
+    return task ? { success: true, data: task } : { success: false, error: `Research task not found: ${args.task_id}` };
+  }
+  async handleListResearchTasks(): Promise<ToolResult<unknown>> { return { success: true, data: { tasks: listResearchTasks(this.lifecycleRegistry) } }; }
+  async handleGetResearchSources(args: { task_id: string }): Promise<ToolResult<unknown>> {
+    const task = this.lifecycleRegistry.get(args.task_id);
+    return task ? { success: true, data: importResearchSources(task) } : { success: false, error: `Research task not found: ${args.task_id}` };
+  }
+  async handleImportResearchSources(args: { task_id: string }): Promise<ToolResult<unknown>> { return this.handleGetResearchSources(args); }
+
+  async handleCreateStudioTask(args: { notebook_url: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
+    const task = await createStudioTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, artifactType: args.artifact_type, prompt: args.prompt, detailLevel: args.detail_level, slideCount: args.slide_count, expectedSourceCount: args.expected_source_count, actualSourceCount: args.actual_source_count, selectedSourceTitles: args.selected_source_titles });
+    return { success: true, data: task };
+  }
+  async handleGetStudioTask(args: { task_id: string }): Promise<ToolResult<unknown>> { const task = await getStudioTask(this.lifecycleRegistry, args.task_id); return task ? { success: true, data: task } : { success: false, error: `Studio task not found: ${args.task_id}` }; }
+  async handleListStudioTasks(): Promise<ToolResult<unknown>> { return { success: true, data: { tasks: listStudioTasks(this.lifecycleRegistry) } }; }
+  async handleDownloadStudioArtifact(args: { task_id: string; destination_dir: string }): Promise<ToolResult<unknown>> { const result = await downloadStudioArtifact(this.lifecycleRegistry, args.task_id, args.destination_dir); return { success: result.success, data: result, error: result.message }; }
 
   async handleCreateCollection(
     args: CreateCollectionInput

@@ -13,6 +13,7 @@ import { systemTools } from "./definitions/system.js";
 import { sourceTools } from "./definitions/sources.js";
 import { collectionTools } from "./definitions/collections.js";
 import { advancedTools } from "./definitions/advanced.js";
+import { lifecycleTools } from "./definitions/lifecycle.js";
 
 /**
  * Build Tool Definitions with NotebookLibrary context
@@ -32,5 +33,6 @@ export function buildToolDefinitions(library: NotebookLibrary): Tool[] {
     ...sourceTools,
     ...collectionTools,
     ...advancedTools,
+    ...lifecycleTools,
   ];
 }

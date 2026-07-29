@@ -30,6 +30,7 @@ import { JsonTaskRegistry } from "../notebooklm/lifecycle.js";
 import { listSources, unsupportedSourceMutation, retrySourceOperation } from "../notebooklm/source-catalog.js";
 import { createResearchTask, getResearchTask, listResearchTasks, importResearchSources } from "../notebooklm/research.js";
 import { createStudioTask, getStudioTask, listStudioTasks, downloadStudioArtifact } from "../notebooklm/studio-lifecycle.js";
+import { BrowserResearchUiAdapter, BrowserStudioUiAdapter } from "../notebooklm/live-lifecycle-adapters.js";
 
 /**
  * Follow-up reminder appended to ask_question answers when explicitly enabled.
@@ -1147,12 +1148,25 @@ export class ToolHandlers {
   }
 
   async handleCreateResearchTask(args: { notebook_url: string; prompt: string; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
-    const task = await createResearchTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, prompt: args.prompt, selectedSourceTitles: args.selected_source_titles });
-    return { success: true, data: task };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(undefined, args.notebook_url);
+      const adapter = new BrowserResearchUiAdapter(session);
+      const task = await createResearchTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, prompt: args.prompt, selectedSourceTitles: args.selected_source_titles }, adapter);
+      return { success: true, data: task };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
   async handleGetResearchTask(args: { task_id: string }): Promise<ToolResult<unknown>> {
-    const task = await getResearchTask(this.lifecycleRegistry, args.task_id);
-    return task ? { success: true, data: task } : { success: false, error: `Research task not found: ${args.task_id}` };
+    const existing = this.lifecycleRegistry.get(args.task_id);
+    if (!existing) return { success: false, error: `Research task not found: ${args.task_id}` };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(undefined, existing.notebookUrl);
+      const task = await getResearchTask(this.lifecycleRegistry, args.task_id, new BrowserResearchUiAdapter(session));
+      return task ? { success: true, data: task } : { success: false, error: `Research task not found: ${args.task_id}` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
   async handleListResearchTasks(): Promise<ToolResult<unknown>> { return { success: true, data: { tasks: listResearchTasks(this.lifecycleRegistry) } }; }
   async handleGetResearchSources(args: { task_id: string }): Promise<ToolResult<unknown>> {
@@ -1162,12 +1176,38 @@ export class ToolHandlers {
   async handleImportResearchSources(args: { task_id: string }): Promise<ToolResult<unknown>> { return this.handleGetResearchSources(args); }
 
   async handleCreateStudioTask(args: { notebook_url: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
-    const task = await createStudioTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, artifactType: args.artifact_type, prompt: args.prompt, detailLevel: args.detail_level, slideCount: args.slide_count, expectedSourceCount: args.expected_source_count, actualSourceCount: args.actual_source_count, selectedSourceTitles: args.selected_source_titles });
-    return { success: true, data: task };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(undefined, args.notebook_url);
+      const adapter = new BrowserStudioUiAdapter(session);
+      const task = await createStudioTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, artifactType: args.artifact_type, prompt: args.prompt, detailLevel: args.detail_level, slideCount: args.slide_count, expectedSourceCount: args.expected_source_count, actualSourceCount: args.actual_source_count, selectedSourceTitles: args.selected_source_titles }, adapter);
+      return { success: true, data: task };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
-  async handleGetStudioTask(args: { task_id: string }): Promise<ToolResult<unknown>> { const task = await getStudioTask(this.lifecycleRegistry, args.task_id); return task ? { success: true, data: task } : { success: false, error: `Studio task not found: ${args.task_id}` }; }
+  async handleGetStudioTask(args: { task_id: string }): Promise<ToolResult<unknown>> {
+    const existing = this.lifecycleRegistry.get(args.task_id);
+    if (!existing) return { success: false, error: `Studio task not found: ${args.task_id}` };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(undefined, existing.notebookUrl);
+      const task = await getStudioTask(this.lifecycleRegistry, args.task_id, new BrowserStudioUiAdapter(session));
+      return task ? { success: true, data: task } : { success: false, error: `Studio task not found: ${args.task_id}` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   async handleListStudioTasks(): Promise<ToolResult<unknown>> { return { success: true, data: { tasks: listStudioTasks(this.lifecycleRegistry) } }; }
-  async handleDownloadStudioArtifact(args: { task_id: string; destination_dir: string }): Promise<ToolResult<unknown>> { const result = await downloadStudioArtifact(this.lifecycleRegistry, args.task_id, args.destination_dir); return { success: result.success, data: result, error: result.message }; }
+  async handleDownloadStudioArtifact(args: { task_id: string; destination_dir: string }): Promise<ToolResult<unknown>> {
+    const task = this.lifecycleRegistry.get(args.task_id);
+    if (!task) return { success: false, error: `Studio task not found: ${args.task_id}` };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(undefined, task.notebookUrl);
+      const result = await downloadStudioArtifact(this.lifecycleRegistry, args.task_id, args.destination_dir, new BrowserStudioUiAdapter(session));
+      return { success: result.success, data: result, error: result.message };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
 
   async handleCreateCollection(
     args: CreateCollectionInput

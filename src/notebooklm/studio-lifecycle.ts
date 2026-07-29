@@ -89,6 +89,7 @@ export async function getStudioTask(
 ): Promise<LifecycleTask | undefined> {
   const task = registry.get(id);
   if (!task || !adapter || task.status === "completed" || task.status === "failed") return task;
+  if (task.artifactType !== "audio_overview") return task;
   try {
     return registry.update(id, await adapter.read())!;
   } catch (error) {

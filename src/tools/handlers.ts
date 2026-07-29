@@ -22,6 +22,8 @@ import { RateLimitError } from "../errors.js";
 import { CleanupManager } from "../utils/cleanup-manager.js";
 import { applyAiMarker, PROVENANCE } from "../utils/disclaimer.js";
 import { addSources } from "../notebooklm/batch-sources.js";
+import { countSources } from "../notebooklm/sources.js";
+import { buildStudioCompletion, type StudioDetailLevel } from "../notebooklm/studio.js";
 import type { Collection, CreateCollectionInput, UpdateCollectionInput } from "../library/types.js";
 
 /**
@@ -1218,15 +1220,28 @@ export class ToolHandlers {
     custom_prompt?: string;
     destination_dir?: string;
     wait_for_completion?: boolean;
+    expected_source_count?: number;
+    slide_count?: number;
+    detail_level?: StudioDetailLevel;
+    verify_source_count?: boolean;
     session_id?: string;
     notebook_id?: string;
     notebook_url?: string;
   }): Promise<ToolResult<unknown>> {
-    if (args.artifact_type !== "audio_overview")
-      return {
-        success: false,
-        error: `Artifact type '${args.artifact_type}' is not implemented: only verified Audio Overview Studio controls are wrapped.`,
-      };
+    const base = {
+      artifactType: args.artifact_type,
+      expectedSourceCount: args.expected_source_count,
+      slideCount: args.slide_count,
+      detailLevel: args.detail_level,
+    };
+    if (args.artifact_type !== "audio_overview") {
+      const data = buildStudioCompletion({
+        ...base,
+        status: "error",
+        message: "This artifact type is not exposed through verified NotebookLM UI controls.",
+      });
+      return { success: false, data, error: data.message };
+    }
     if (args.operation === "download" && !args.destination_dir)
       return { success: false, error: "destination_dir is required for download" };
     try {
@@ -1234,17 +1249,52 @@ export class ToolHandlers {
         args.session_id,
         await this.resolveNotebookUrl(args.notebook_id, args.notebook_url)
       );
-      if (args.operation === "generate")
+      const actualSourceCount = args.verify_source_count
+        ? await countSources(session.getPage()!)
+        : undefined;
+      if (
+        args.verify_source_count &&
+        args.expected_source_count !== undefined &&
+        actualSourceCount !== args.expected_source_count
+      ) {
+        const data = buildStudioCompletion({
+          ...base,
+          status: "error",
+          actualSourceCount,
+          message: "Notebook source count verification failed; Studio generation was not started.",
+        });
+        return { success: false, data, error: data.message };
+      }
+      if (args.operation === "generate") {
+        const result = await session.generateAudio({
+          customPrompt: args.custom_prompt,
+          waitForCompletion: args.wait_for_completion,
+        });
         return {
-          success: true,
-          data: await session.generateAudio({
-            customPrompt: args.custom_prompt,
-            waitForCompletion: args.wait_for_completion,
-          }),
+          success: result.status !== "error",
+          data: buildStudioCompletion({ ...base, ...result, actualSourceCount }),
         };
-      if (args.operation === "status")
-        return { success: true, data: await session.getAudioStatus() };
-      return { success: true, data: await session.downloadAudio(args.destination_dir!) };
+      }
+      if (args.operation === "status") {
+        const result = await session.getAudioStatus();
+        return {
+          success: result.status !== "error",
+          data: buildStudioCompletion({ ...base, ...result, actualSourceCount }),
+        };
+      }
+      const download = await session.downloadAudio(args.destination_dir!);
+      return {
+        success: download.success,
+        data: {
+          ...buildStudioCompletion({
+            ...base,
+            status: download.success ? "ready" : "error",
+            actualSourceCount,
+            message: download.message,
+          }),
+          download,
+        },
+      };
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) };
     }

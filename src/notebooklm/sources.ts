@@ -48,6 +48,96 @@ export interface AddSourceResult {
   sourceCountBefore: number;
   sourceCountAfter: number;
   message?: string;
+  failureClass?: SourceFailureClass;
+  retryable: boolean;
+  nextSteps: string[];
+  attempts: number;
+}
+
+export type SourceFailureClass =
+  | "ui_not_ready"
+  | "source_unavailable"
+  | "notebook_redirect"
+  | "source_limit"
+  | "validation"
+  | "unknown";
+
+export interface SourceFailureDiagnostic {
+  failureClass: SourceFailureClass;
+  retryable: boolean;
+  nextSteps: string[];
+}
+
+export function classifySourceFailure(message: string, type: SourceType): SourceFailureDiagnostic {
+  const lower = message.toLowerCase();
+  if (
+    /chat input|add.?source|source dialog|overlay|input field|notebook page has loaded/.test(lower)
+  ) {
+    return {
+      failureClass: "ui_not_ready",
+      retryable: true,
+      nextSteps: [
+        "Retry once after the NotebookLM page/session is reinitialized.",
+        "If it repeats, call add_source with show_browser=true and verify the notebook is loaded.",
+      ],
+    };
+  }
+  if (/redirected|different notebook|untitled notebook/.test(lower)) {
+    return {
+      failureClass: "notebook_redirect",
+      retryable: false,
+      nextSteps: [
+        "Use the notebook URL shown in the error and retry the source against that notebook.",
+      ],
+    };
+  }
+  if (/50 sources|source limit|maximum.*source|too many sources/.test(lower)) {
+    return {
+      failureClass: "source_limit",
+      retryable: false,
+      nextSteps: ["Remove an existing source or choose a notebook with available source capacity."],
+    };
+  }
+  if (/invalid|empty|fully-qualified|unsupported|url/.test(lower) && type === "url") {
+    return {
+      failureClass: "validation",
+      retryable: false,
+      nextSteps: [
+        "Check that the URL is reachable, fully qualified, and points to importable content.",
+      ],
+    };
+  }
+  if (/crawl|fetch|unavailable|blocked|timeout|network/.test(lower)) {
+    return {
+      failureClass: "source_unavailable",
+      retryable: true,
+      nextSteps: ["Confirm the URL is reachable without authentication, then retry the import."],
+    };
+  }
+  return {
+    failureClass: "unknown",
+    retryable: false,
+    nextSteps: [
+      "Inspect the returned message, verify the notebook is loaded, and retry once if appropriate.",
+    ],
+  };
+}
+
+function failedResult(
+  type: SourceType,
+  message: string,
+  before = 0,
+  attempts = 1
+): AddSourceResult {
+  return {
+    success: false,
+    type,
+    sourceCountBefore: before,
+    sourceCountAfter: before,
+    message,
+    ...classifySourceFailure(message, type),
+    attempts,
+  };
 }
 
 export async function addSource(page: Page, input: AddSourceInput): Promise<AddSourceResult> {
@@ -86,18 +176,17 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
       const currentUrl = page.url();
       const currentUuid = currentUrl.match(/notebook\/([a-f0-9-]+)/)?.[1];
       if (currentUuid && currentUuid !== expectedUuid) {
-        log.error(
-          `  ❌ Notebook redirect: expected ${expectedUuid}, got ${currentUuid}`
-        );
+        log.error(`  ❌ Notebook redirect: expected ${expectedUuid}, got ${currentUuid}`);
         return {
-          success: false,
-          type: input.type,
-          sourceCountBefore: before,
-          sourceCountAfter: before,
-          message:
+          ...failedResult(
+            input.type,
             `NotebookLM redirected to a different notebook (${currentUuid}) instead of ` +
-            `the target (${expectedUuid}). This is a known quirk for pasted-text uploads — ` +
-            `the source landed in a new "Untitled notebook".`,
+              `the target (${expectedUuid}). This is a known quirk for pasted-text uploads — ` +
+              `the source landed in a new "Untitled notebook".`,
+            before
+          ),
+          failureClass: "notebook_redirect",
+          retryable: false,
         };
       }
     }
@@ -113,31 +202,25 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
         type: input.type,
         sourceCountBefore: before,
         sourceCountAfter: after,
+        retryable: false,
+        nextSteps: [],
+        attempts: 1,
       };
     }
 
     // 9. Last-ditch: maybe an error toast surfaced; surface it verbatim.
     const errorText = await readDialogError(page);
-    return {
-      success: false,
-      type: input.type,
-      sourceCountBefore: before,
-      sourceCountAfter: after,
-      message:
-        errorText ||
+    return failedResult(
+      input.type,
+      errorText ||
         "Source dialog completed but the source list did not grow within 90 s. " +
           "Either NotebookLM is still crawling/indexing or the upload silently failed.",
-    };
+      before
+    );
   } catch (err) {
     if (isRecoverable(err)) throw err;
     log.warning(`  ⚠️  add_source failed: ${err}`);
-    return {
-      success: false,
-      type: input.type,
-      sourceCountBefore: 0,
-      sourceCountAfter: 0,
-      message: err instanceof Error ? err.message : String(err),
-    };
+    return failedResult(input.type, err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -193,17 +276,16 @@ async function openAddSourceOverlay(page: Page): Promise<void> {
 
   // Try the sidebar button first — fastest path on a populated notebook.
   try {
-    await page
-      .locator(joinAlt(Selectors.sources.addButton))
-      .first()
-      .click({ timeout: 5_000 });
+    await page.locator(joinAlt(Selectors.sources.addButton)).first().click({ timeout: 5_000 });
     await page
       .locator(Selectors.sources.overlayPane)
       .first()
       .waitFor({ state: "visible", timeout: 8_000 });
     return;
   } catch (err) {
-    log.warning(`  ⚠️  Add-source button click failed (${err}), trying ?addSource=true URL fallback`);
+    log.warning(
+      `  ⚠️  Add-source button click failed (${err}), trying ?addSource=true URL fallback`
+    );
   }
 
   // URL fallback — useful when the sidebar button is hidden or covered.

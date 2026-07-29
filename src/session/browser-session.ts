@@ -494,7 +494,54 @@ export class BrowserSession {
     if (!this.initialized || !this.page || this.isPageClosedSafe()) {
       await this.init();
     }
-    return await addSourceToPage(this.page!, input);
+    const maxAttempts = 2;
+    let lastResult: AddSourceResult | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        lastResult = await addSourceToPage(this.page!, input);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          !/chat input|add.?source|source dialog|overlay|input field/i.test(message) ||
+          attempt === maxAttempts
+        ) {
+          throw error;
+        }
+        lastResult = {
+          success: false,
+          type: input.type,
+          sourceCountBefore: 0,
+          sourceCountAfter: 0,
+          message,
+          failureClass: "ui_not_ready",
+          retryable: true,
+          nextSteps: ["Reinitialize the NotebookLM session and retry the source import."],
+          attempts: attempt,
+        };
+      }
+      if (lastResult.success || !lastResult.retryable || attempt === maxAttempts) {
+        return { ...lastResult, attempts: attempt };
+      }
+      log.warning(
+        `  ♻️  Source import UI was not ready; reinitializing session (attempt ${attempt + 1}/${maxAttempts})`
+      );
+      await this.reinitialize();
+    }
+    return { ...lastResult!, attempts: maxAttempts };
+  }
+
+  /** Recreate the NotebookLM page without replacing the session id. */
+  async reinitialize(): Promise<void> {
+    this.initialized = false;
+    if (this.page) {
+      try {
+        await this.page.close();
+      } catch {
+        /* page may already be gone */
+      }
+    }
+    this.page = null;
+    await this.init();
   }
 
   /**

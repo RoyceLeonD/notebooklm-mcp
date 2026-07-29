@@ -313,7 +313,7 @@ export const Selectors = {
      * contains the Download item.
      */
     audioMoreMenuButton: [
-      "artifact-library-item button:has(mat-icon:text-is(\"more_vert\"))",
+      'artifact-library-item button:has(mat-icon:text-is("more_vert"))',
       'artifact-library-item button[aria-label*="mehr" i]',
       'artifact-library-item button[aria-label*="more" i]',
       'artifact-library-item button[aria-label*="plus" i]',
@@ -340,6 +340,25 @@ export const Selectors = {
   },
 
   notebooks: {
+    createButton: [
+      'button:has-text("New notebook")',
+      'button:has-text("Create notebook")',
+      'button:has-text("Neues Notizbuch")',
+      'button:has-text("Créer un bloc-notes")',
+      '[role="button"]:has-text("New notebook")',
+      '[aria-label*="new notebook" i]',
+    ],
+    titleInput: [
+      'input[placeholder*="title" i]',
+      'input[placeholder*="name" i]',
+      'input[aria-label*="title" i]',
+    ],
+    createConfirm: [
+      'button:has-text("Create")',
+      'button:has-text("Erstellen")',
+      'button:has-text("Créer")',
+      'button[type="submit"]',
+    ],
     projectCard: 'button[aria-labelledby*="project-"]',
     cardMenuButton: [
       'button[aria-label*="menu" i]',

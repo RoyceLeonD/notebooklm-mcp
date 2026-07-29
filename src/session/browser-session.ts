@@ -38,6 +38,10 @@ import {
   type DownloadAudioResult,
 } from "../notebooklm/audio.js";
 import { CONFIG } from "../config.js";
+import {
+  createNotebook as createNotebookOnPage,
+  type CreateNotebookResult,
+} from "../notebooklm/notebooks.js";
 import { log } from "../utils/logger.js";
 import type { SessionInfo, ProgressCallback } from "../types.js";
 import { RateLimitError } from "../errors.js";
@@ -521,6 +525,11 @@ export class BrowserSession {
       await this.init();
     }
     return await downloadAudioOnPage(this.page!, destinationDir);
+  }
+
+  async createNotebook(title: string): Promise<CreateNotebookResult> {
+    if (!this.initialized || !this.page || this.isPageClosedSafe()) await this.init();
+    return createNotebookOnPage(this.page!, title);
   }
 
   /**

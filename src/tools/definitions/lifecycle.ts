@@ -106,6 +106,7 @@ export const lifecycleTools: Tool[] = [
       type: "object",
       properties: {
         ...target,
+        title: { type: "string", description: "Stable local title used to identify the artifact for later revision." },
         artifact_type: { type: "string", enum: ["audio_overview", "presentation", "slide_deck"] },
         prompt: { type: "string" },
         detail_level: { type: "string", enum: ["standard", "detailed"] },
@@ -139,6 +140,31 @@ export const lifecycleTools: Tool[] = [
       type: "object",
       properties: { task_id: { type: "string" }, destination_dir: { type: "string" } },
       required: ["task_id", "destination_dir"],
+    },
+  },
+  {
+    name: "revise_studio_artifact",
+    description:
+      "Record per-slide feedback for, and cautiously revise, only the completed 13-source slide-deck task. Returns incomplete unless stable live UI controls and card scoping are verified.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string" },
+        expected_source_count: { type: "integer", const: 13 },
+        artifact_title: { type: "string" },
+        artifact_created_at: { type: "string" },
+        slide_feedback: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: { slide_number: { type: "integer", minimum: 1 }, note: { type: "string", minLength: 1 } },
+            required: ["slide_number", "note"],
+          },
+        },
+        global_revision_prompt: { type: "string" },
+      },
+      required: ["task_id", "expected_source_count", "artifact_title", "artifact_created_at", "slide_feedback"],
     },
   },
 ];

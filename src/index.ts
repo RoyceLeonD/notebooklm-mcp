@@ -479,10 +479,11 @@ class NotebookLMMCPServer {
           case "list_research_tasks": result = await this.toolHandlers.handleListResearchTasks(); break;
           case "get_research_sources": result = await this.toolHandlers.handleGetResearchSources(args as { task_id: string }); break;
           case "import_research_sources": result = await this.toolHandlers.handleImportResearchSources(args as { task_id: string }); break;
-          case "create_studio_task": result = await this.toolHandlers.handleCreateStudioTask(args as { notebook_url: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }); break;
+          case "create_studio_task": result = await this.toolHandlers.handleCreateStudioTask(args as { notebook_url: string; title?: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }); break;
           case "get_studio_task": result = await this.toolHandlers.handleGetStudioTask(args as { task_id: string }); break;
           case "list_studio_tasks": result = await this.toolHandlers.handleListStudioTasks(); break;
           case "download_studio_artifact": result = await this.toolHandlers.handleDownloadStudioArtifact(args as { task_id: string; destination_dir: string }); break;
+          case "revise_studio_artifact": result = await this.toolHandlers.handleReviseStudioArtifact(args as { task_id: string; expected_source_count: number; artifact_title: string; artifact_created_at: string; slide_feedback: Array<{ slide_number: number; note: string }>; global_revision_prompt?: string }); break;
 
           default:
             log.error(`❌ [MCP] Unknown tool: ${name}`);

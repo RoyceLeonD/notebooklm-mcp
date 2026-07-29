@@ -206,6 +206,10 @@ All tools below are registered in v2.0.0 and visible under the `full` profile. S
 | `add_source` | Add a source to a notebook. v2 supports `type=url` (web crawl) and `type=text` (paste). Returns source counts before/after. |
 | `generate_audio` | Generate an Audio Overview. Optional `custom_prompt`, `timeout_ms` (default 600 000 ms). |
 | `download_audio` | Save the most recent Audio Overview to `destination_dir`. Run `generate_audio` first if none exists. |
+| `create_studio_task` / `get_studio_task` | Persist and inspect local Studio task IDs. Slide-deck creation/status/download remains explicitly incomplete unless the live UI path is verified. |
+| `revise_studio_artifact` | Store per-slide notes and a global prompt for a completed slide deck, guarded by exact title/created metadata and source count **13**. It never targets the 16-source artifact. Because stable Studio revise controls/card scoping are not currently verified, the tool returns `status: incomplete` with `nextSteps` rather than claiming a revision. |
+
+`revise_studio_artifact` requires `task_id`, `expected_source_count: 13`, `artifact_title`, `artifact_created_at`, and at least one `{slide_number, note}` entry in `slide_feedback`. Revision records are persisted in `studio-revisions.json` under the configured data directory.
 
 ### Library
 

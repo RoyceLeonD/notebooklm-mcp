@@ -31,6 +31,7 @@ import { listSources, unsupportedSourceMutation, retrySourceOperation } from "..
 import { createResearchTask, getResearchTask, listResearchTasks, importResearchSources } from "../notebooklm/research.js";
 import { createStudioTask, getStudioTask, listStudioTasks, downloadStudioArtifact } from "../notebooklm/studio-lifecycle.js";
 import { BrowserResearchUiAdapter, BrowserStudioUiAdapter } from "../notebooklm/live-lifecycle-adapters.js";
+import { JsonRevisionRegistry, reviseStudioArtifact } from "../notebooklm/studio-revision.js";
 
 /**
  * Follow-up reminder appended to ask_question answers when explicitly enabled.
@@ -56,12 +57,14 @@ export class ToolHandlers {
   private authManager: AuthManager;
   private library: NotebookLibrary;
   private lifecycleRegistry: JsonTaskRegistry;
+  private revisionRegistry: JsonRevisionRegistry;
 
   constructor(sessionManager: SessionManager, authManager: AuthManager, library: NotebookLibrary) {
     this.sessionManager = sessionManager;
     this.authManager = authManager;
     this.library = library;
     this.lifecycleRegistry = new JsonTaskRegistry(path.join(CONFIG.dataDir, "lifecycle-tasks.json"));
+    this.revisionRegistry = new JsonRevisionRegistry(path.join(CONFIG.dataDir, "studio-revisions.json"));
   }
 
   /**
@@ -1175,11 +1178,11 @@ export class ToolHandlers {
   }
   async handleImportResearchSources(args: { task_id: string }): Promise<ToolResult<unknown>> { return this.handleGetResearchSources(args); }
 
-  async handleCreateStudioTask(args: { notebook_url: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
+  async handleCreateStudioTask(args: { notebook_url: string; title?: string; artifact_type: "audio_overview" | "presentation" | "slide_deck"; prompt?: string; detail_level?: "standard" | "detailed"; slide_count?: number; expected_source_count?: number; actual_source_count?: number; selected_source_titles?: string[] }): Promise<ToolResult<unknown>> {
     try {
       const session = await this.sessionManager.getOrCreateSession(undefined, args.notebook_url);
       const adapter = new BrowserStudioUiAdapter(session);
-      const task = await createStudioTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, artifactType: args.artifact_type, prompt: args.prompt, detailLevel: args.detail_level, slideCount: args.slide_count, expectedSourceCount: args.expected_source_count, actualSourceCount: args.actual_source_count, selectedSourceTitles: args.selected_source_titles }, adapter);
+      const task = await createStudioTask(this.lifecycleRegistry, { notebookUrl: args.notebook_url, title: args.title, artifactType: args.artifact_type, prompt: args.prompt, detailLevel: args.detail_level, slideCount: args.slide_count, expectedSourceCount: args.expected_source_count, actualSourceCount: args.actual_source_count, selectedSourceTitles: args.selected_source_titles }, adapter);
       return { success: true, data: task };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -1207,6 +1210,18 @@ export class ToolHandlers {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  async handleReviseStudioArtifact(args: { task_id: string; expected_source_count: number; artifact_title: string; artifact_created_at: string; slide_feedback: Array<{ slide_number: number; note: string }>; global_revision_prompt?: string }): Promise<ToolResult<unknown>> {
+    const record = await reviseStudioArtifact(this.lifecycleRegistry, this.revisionRegistry, {
+      taskId: args.task_id,
+      expectedSourceCount: args.expected_source_count,
+      artifactTitle: args.artifact_title,
+      artifactCreatedAt: args.artifact_created_at,
+      slideFeedback: args.slide_feedback.map((item) => ({ slideNumber: item.slide_number, note: item.note })),
+      globalRevisionPrompt: args.global_revision_prompt,
+    });
+    return { success: true, data: record };
   }
 
   async handleCreateCollection(

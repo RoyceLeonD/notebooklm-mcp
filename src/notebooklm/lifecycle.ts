@@ -12,6 +12,7 @@ export interface LifecycleTask {
   createdAt: string;
   updatedAt: string;
   notebookUrl: string;
+  title?: string;
   prompt?: string;
   artifactType?: string;
   detailLevel?: "standard" | "detailed";

@@ -2,6 +2,7 @@ import { createLocalTaskId, type JsonTaskRegistry, type LifecycleTask } from "./
 
 export interface StudioInput {
   notebookUrl: string;
+  title?: string;
   artifactType: "audio_overview" | "presentation" | "slide_deck";
   prompt?: string;
   detailLevel?: "standard" | "detailed";
@@ -36,6 +37,7 @@ export async function createStudioTask(
     createdAt: now,
     updatedAt: now,
     notebookUrl: input.notebookUrl,
+    title: input.title,
     prompt: input.prompt,
     artifactType: input.artifactType,
     detailLevel: input.detailLevel,

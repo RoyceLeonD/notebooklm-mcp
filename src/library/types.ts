@@ -27,6 +27,29 @@ export interface NotebookEntry {
 
   // Optional tags for organization
   tags?: string[]; // Custom tags for filtering
+  collection_ids?: string[]; // Local collections; Google has no public collection API
+}
+
+export interface Collection {
+  id: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+  notebook_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCollectionInput {
+  name: string;
+  description?: string;
+  tags?: string[];
+}
+export interface UpdateCollectionInput {
+  id: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
 }
 
 /**
@@ -34,6 +57,7 @@ export interface NotebookEntry {
  */
 export interface Library {
   notebooks: NotebookEntry[]; // All notebooks in library
+  collections: Collection[];
   active_notebook_id: string | null; // Currently selected notebook
   last_modified: string; // ISO timestamp of last modification
   version: string; // Library format version (for future migrations)

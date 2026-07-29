@@ -16,6 +16,9 @@ import type {
   AddNotebookInput,
   UpdateNotebookInput,
   LibraryStats,
+  Collection,
+  CreateCollectionInput,
+  UpdateCollectionInput,
 } from "./types.js";
 
 export class NotebookLibrary {
@@ -42,6 +45,8 @@ export class NotebookLibrary {
       if (fs.existsSync(this.libraryPath)) {
         const data = fs.readFileSync(this.libraryPath, "utf-8");
         const library = JSON.parse(data) as Library;
+        library.collections ??= [];
+        for (const notebook of library.notebooks) notebook.collection_ids ??= [];
         log.success(`  ✅ Loaded library with ${library.notebooks.length} notebooks`);
         return library;
       }
@@ -90,6 +95,7 @@ export class NotebookLibrary {
 
     return {
       notebooks,
+      collections: [],
       active_notebook_id: notebooks.length > 0 ? notebooks[0].id : null,
       last_modified: new Date().toISOString(),
       version: "1.0.0",
@@ -158,6 +164,7 @@ export class NotebookLibrary {
       last_used: new Date().toISOString(),
       use_count: 0,
       tags: input.tags || [],
+      collection_ids: [],
     };
 
     // Add to library
@@ -337,5 +344,98 @@ export class NotebookLibrary {
         n.topics.some((t) => t.toLowerCase().includes(lowerQuery)) ||
         n.tags?.some((t) => t.toLowerCase().includes(lowerQuery))
     );
+  }
+
+  createCollection(input: CreateCollectionInput): Collection {
+    const now = new Date().toISOString();
+    const base =
+      input.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "collection";
+    let id = base;
+    let n = 1;
+    while (this.library.collections.some((c) => c.id === id)) id = `${base}-${n++}`;
+    const collection: Collection = {
+      id,
+      name: input.name,
+      description: input.description,
+      tags: input.tags ?? [],
+      notebook_ids: [],
+      created_at: now,
+      updated_at: now,
+    };
+    this.saveLibrary({ ...this.library, collections: [...this.library.collections, collection] });
+    return collection;
+  }
+
+  listCollections(): Collection[] {
+    return this.library.collections;
+  }
+  getCollection(id: string): Collection | null {
+    return this.library.collections.find((c) => c.id === id) ?? null;
+  }
+
+  updateCollection(input: UpdateCollectionInput): Collection {
+    const current = this.getCollection(input.id);
+    if (!current) throw new Error(`Collection not found: ${input.id}`);
+    const updated: Collection = {
+      ...current,
+      name: input.name ?? current.name,
+      description: input.description ?? current.description,
+      tags: input.tags ?? current.tags,
+      updated_at: new Date().toISOString(),
+    };
+    const collections = this.library.collections.map((c) => (c.id === input.id ? updated : c));
+    this.saveLibrary({ ...this.library, collections });
+    return updated;
+  }
+
+  removeCollection(id: string): boolean {
+    if (!this.getCollection(id)) return false;
+    const collections = this.library.collections.filter((c) => c.id !== id);
+    const notebooks = this.library.notebooks.map((n) => ({
+      ...n,
+      collection_ids: (n.collection_ids ?? []).filter((c) => c !== id),
+    }));
+    this.saveLibrary({ ...this.library, collections, notebooks });
+    return true;
+  }
+
+  assignNotebookToCollection(
+    collectionId: string,
+    notebookId: string,
+    assigned = true
+  ): Collection {
+    const collection = this.getCollection(collectionId);
+    if (!collection) throw new Error(`Collection not found: ${collectionId}`);
+    const notebook = this.getNotebook(notebookId);
+    if (!notebook) throw new Error(`Notebook not found: ${notebookId}`);
+    const ids = new Set(collection.notebook_ids);
+    if (assigned) ids.add(notebookId);
+    else ids.delete(notebookId);
+    const updatedCollection = {
+      ...collection,
+      notebook_ids: [...ids],
+      updated_at: new Date().toISOString(),
+    };
+    const notebooks = this.library.notebooks.map((n) =>
+      n.id === notebookId
+        ? {
+            ...n,
+            collection_ids: assigned
+              ? [...new Set([...(n.collection_ids ?? []), collectionId])]
+              : (n.collection_ids ?? []).filter((c) => c !== collectionId),
+          }
+        : n
+    );
+    this.saveLibrary({
+      ...this.library,
+      notebooks,
+      collections: this.library.collections.map((c) =>
+        c.id === collectionId ? updatedCollection : c
+      ),
+    });
+    return updatedCollection;
   }
 }

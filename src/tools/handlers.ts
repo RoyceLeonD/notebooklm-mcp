@@ -21,6 +21,8 @@ import type { AskQuestionResult, ToolResult, ProgressCallback } from "../types.j
 import { RateLimitError } from "../errors.js";
 import { CleanupManager } from "../utils/cleanup-manager.js";
 import { applyAiMarker, PROVENANCE } from "../utils/disclaimer.js";
+import { addSources } from "../notebooklm/batch-sources.js";
+import type { Collection, CreateCollectionInput, UpdateCollectionInput } from "../library/types.js";
 
 /**
  * Follow-up reminder appended to ask_question answers when explicitly enabled.
@@ -1029,9 +1031,7 @@ export class ToolHandlers {
       // `started` and `in_progress` count as success — the generation is on
       // its way; the caller polls `get_audio_status` for completion.
       const ok =
-        result.status === "ready" ||
-        result.status === "started" ||
-        result.status === "in_progress";
+        result.status === "ready" || result.status === "started" || result.status === "in_progress";
       return { success: ok, data: { result } };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -1106,6 +1106,147 @@ export class ToolHandlers {
       return { success: false, error: msg };
     } finally {
       Object.assign(CONFIG, originalConfig);
+    }
+  }
+
+  async handleCreateCollection(
+    args: CreateCollectionInput
+  ): Promise<ToolResult<{ collection: Collection }>> {
+    try {
+      return { success: true, data: { collection: this.library.createCollection(args) } };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async handleListCollections(): Promise<ToolResult<{ collections: Collection[] }>> {
+    return { success: true, data: { collections: this.library.listCollections() } };
+  }
+  async handleGetCollection(args: { id: string }): Promise<ToolResult<{ collection: Collection }>> {
+    const collection = this.library.getCollection(args.id);
+    return collection
+      ? { success: true, data: { collection } }
+      : { success: false, error: `Collection not found: ${args.id}` };
+  }
+  async handleUpdateCollection(
+    args: UpdateCollectionInput
+  ): Promise<ToolResult<{ collection: Collection }>> {
+    try {
+      return { success: true, data: { collection: this.library.updateCollection(args) } };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async handleRemoveCollection(args: { id: string }): Promise<ToolResult<{ removed: boolean }>> {
+    return { success: true, data: { removed: this.library.removeCollection(args.id) } };
+  }
+  async handleAssignNotebookCollection(args: {
+    collection_id: string;
+    notebook_id: string;
+    assigned?: boolean;
+  }): Promise<ToolResult<{ collection: Collection }>> {
+    try {
+      return {
+        success: true,
+        data: {
+          collection: this.library.assignNotebookToCollection(
+            args.collection_id,
+            args.notebook_id,
+            args.assigned ?? true
+          ),
+        },
+      };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async handleCreateNotebook(args: {
+    title: string;
+    description?: string;
+    topics?: string[];
+    show_browser?: boolean;
+  }): Promise<ToolResult<{ notebook: NotebookEntry }>> {
+    const originalConfig = { ...CONFIG };
+    try {
+      if (args.show_browser !== undefined)
+        Object.assign(CONFIG, applyBrowserOptions(undefined, args.show_browser));
+      const session = await this.sessionManager.getOrCreateSession(
+        undefined,
+        "https://notebooklm.google.com/",
+        args.show_browser
+      );
+      const created = await session.createNotebook(args.title);
+      const notebook = this.library.addNotebook({
+        url: created.url,
+        name: args.title,
+        description: args.description ?? "Created through NotebookLM UI",
+        topics: args.topics ?? [],
+      });
+      return { success: true, data: { notebook } };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      Object.assign(CONFIG, originalConfig);
+    }
+  }
+  async handleAddSources(args: {
+    sources: Parameters<typeof addSources>[1];
+    session_id?: string;
+    notebook_id?: string;
+    notebook_url?: string;
+    show_browser?: boolean;
+  }): Promise<ToolResult<Awaited<ReturnType<typeof addSources>>>> {
+    const originalConfig = { ...CONFIG };
+    try {
+      if (args.show_browser !== undefined)
+        Object.assign(CONFIG, applyBrowserOptions(undefined, args.show_browser));
+      const session = await this.sessionManager.getOrCreateSession(
+        args.session_id,
+        await this.resolveNotebookUrl(args.notebook_id, args.notebook_url),
+        args.show_browser
+      );
+      const result = await addSources(session, args.sources);
+      return { success: result.succeeded === result.requested, data: result };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      Object.assign(CONFIG, originalConfig);
+    }
+  }
+  async handleStudioArtifact(args: {
+    operation: "generate" | "status" | "download";
+    artifact_type: string;
+    custom_prompt?: string;
+    destination_dir?: string;
+    wait_for_completion?: boolean;
+    session_id?: string;
+    notebook_id?: string;
+    notebook_url?: string;
+  }): Promise<ToolResult<unknown>> {
+    if (args.artifact_type !== "audio_overview")
+      return {
+        success: false,
+        error: `Artifact type '${args.artifact_type}' is not implemented: only verified Audio Overview Studio controls are wrapped.`,
+      };
+    if (args.operation === "download" && !args.destination_dir)
+      return { success: false, error: "destination_dir is required for download" };
+    try {
+      const session = await this.sessionManager.getOrCreateSession(
+        args.session_id,
+        await this.resolveNotebookUrl(args.notebook_id, args.notebook_url)
+      );
+      if (args.operation === "generate")
+        return {
+          success: true,
+          data: await session.generateAudio({
+            customPrompt: args.custom_prompt,
+            waitForCompletion: args.wait_for_completion,
+          }),
+        };
+      if (args.operation === "status")
+        return { success: true, data: await session.getAudioStatus() };
+      return { success: true, data: await session.downloadAudio(args.destination_dir!) };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 

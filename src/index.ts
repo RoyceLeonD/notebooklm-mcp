@@ -309,6 +309,72 @@ class NotebookLMMCPServer {
             result = await this.toolHandlers.handleGetLibraryStats();
             break;
 
+          case "create_collection":
+            result = await this.toolHandlers.handleCreateCollection(
+              args as { name: string; description?: string; tags?: string[] }
+            );
+            break;
+          case "list_collections":
+            result = await this.toolHandlers.handleListCollections();
+            break;
+          case "get_collection":
+            result = await this.toolHandlers.handleGetCollection(args as { id: string });
+            break;
+          case "update_collection":
+            result = await this.toolHandlers.handleUpdateCollection(
+              args as { id: string; name?: string; description?: string; tags?: string[] }
+            );
+            break;
+          case "remove_collection":
+            result = await this.toolHandlers.handleRemoveCollection(args as { id: string });
+            break;
+          case "assign_notebook_collection":
+            result = await this.toolHandlers.handleAssignNotebookCollection(
+              args as { collection_id: string; notebook_id: string; assigned?: boolean }
+            );
+            break;
+          case "create_notebook":
+            result = await this.toolHandlers.handleCreateNotebook(
+              args as {
+                title: string;
+                description?: string;
+                topics?: string[];
+                show_browser?: boolean;
+              }
+            );
+            break;
+          case "add_sources":
+            result = await this.toolHandlers.handleAddSources(
+              args as {
+                sources: Array<{
+                  type: "markdown" | "url" | "text";
+                  path?: string;
+                  url?: string;
+                  text?: string;
+                  title?: string;
+                }>;
+                session_id?: string;
+                notebook_id?: string;
+                notebook_url?: string;
+                show_browser?: boolean;
+              }
+            );
+            break;
+          case "studio_artifact":
+            result = await this.toolHandlers.handleStudioArtifact(
+              args as {
+                operation: "generate" | "status" | "download";
+                artifact_type: string;
+                custom_prompt?: string;
+                destination_dir?: string;
+                wait_for_completion?: boolean;
+                session_id?: string;
+                notebook_id?: string;
+                notebook_url?: string;
+              }
+            );
+            break;
+
           case "list_sessions":
             result = await this.toolHandlers.handleListSessions();
             break;

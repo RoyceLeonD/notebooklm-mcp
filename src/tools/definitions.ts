@@ -11,6 +11,8 @@ import { notebookManagementTools } from "./definitions/notebook-management.js";
 import { sessionManagementTools } from "./definitions/session-management.js";
 import { systemTools } from "./definitions/system.js";
 import { sourceTools } from "./definitions/sources.js";
+import { collectionTools } from "./definitions/collections.js";
+import { advancedTools } from "./definitions/advanced.js";
 
 /**
  * Build Tool Definitions with NotebookLibrary context
@@ -28,5 +30,7 @@ export function buildToolDefinitions(library: NotebookLibrary): Tool[] {
     ...sessionManagementTools,
     ...systemTools,
     ...sourceTools,
+    ...collectionTools,
+    ...advancedTools,
   ];
 }

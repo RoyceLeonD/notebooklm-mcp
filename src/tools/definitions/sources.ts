@@ -35,11 +35,11 @@ const sharedNotebookTargeting = {
 export const addSourceTool: Tool = {
   name: "add_source",
   description:
-    "Ingest a source into a NotebookLM notebook. Supports two source types " +
+    "Ingest a source into a NotebookLM notebook. Supports three source types " +
     "in v2.0:\n" +
     "  • `url` — NotebookLM crawls and indexes a website\n" +
-    "  • `text` — paste raw text (treated as a copied document)\n\n" +
-    "File / YouTube / Google-Drive uploads are not yet implemented.\n\n" +
+    "  • `text` — paste raw text (treated as a copied document)\n" +
+    "  • `file` — upload a local PDF, PPT, or PPTX through the authenticated browser UI\n\n" +
     "Returns `sourceCountBefore`/`sourceCountAfter` so the caller can verify " +
     "the new source landed. Call once per source — multiple sources require " +
     "multiple calls. NotebookLM finishes indexing within 5–30 seconds; " +
@@ -53,16 +53,20 @@ export const addSourceTool: Tool = {
     properties: {
       type: {
         type: "string",
-        enum: ["url", "text"],
+        enum: ["url", "text", "file"],
         description:
           "`url` crawls the supplied website; `text` ingests `content` " +
-          "verbatim as a copied document.",
+          "verbatim; `file` uploads the local path in `file_path` (PDF/PPT/PPTX only).",
       },
       content: {
         type: "string",
         description:
           "When `type=url`: a fully-qualified URL (https://…). " +
           "When `type=text`: the raw text body (any length up to NotebookLM's per-source word limit, ~500 k for free tier).",
+      },
+      file_path: {
+        type: "string",
+        description: "Absolute local path to a PDF, PPT, or PPTX file when `type=file`.",
       },
       title: {
         type: "string",
@@ -78,7 +82,7 @@ export const addSourceTool: Tool = {
       },
       ...sharedNotebookTargeting,
     },
-    required: ["type", "content"],
+    required: ["type"],
   },
   annotations: {
     title: "Add source to notebook",

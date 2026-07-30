@@ -57,6 +57,44 @@ export class SessionManager {
   }
 
   /**
+   * Create a bounded debug session without requiring authentication. This is
+   * intentionally separate from normal NotebookLM sessions so diagnostics can
+   * inspect Google sign-in redirects and changed NotebookLM DOM safely.
+   */
+  async getOrCreateDebugSession(
+    sessionId?: string,
+    notebookUrl?: string,
+    overrideHeadless?: boolean
+  ): Promise<BrowserSession> {
+    const targetUrl = (notebookUrl || CONFIG.notebookUrl || "").trim();
+    if (!targetUrl) throw new Error("Notebook URL is required to create a debug session");
+    let parsed: URL;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      throw new Error("Notebook URL must be an absolute URL");
+    }
+    const allowedHosts = new Set(["notebook.google.com", "notebooklm.google.com"]);
+    if (parsed.protocol !== "https:" || !allowedHosts.has(parsed.hostname)) {
+      throw new Error("Debug sessions are restricted to official NotebookLM URLs");
+    }
+    if (!sessionId) sessionId = this.generateSessionId();
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      existing.updateActivity();
+      return existing;
+    }
+    if (this.sessions.size >= this.maxSessions && !(await this.cleanupOldestSession())) {
+      throw new Error(`Max sessions (${this.maxSessions}) reached and no inactive sessions to clean up`);
+    }
+    await this.sharedContextManager.getOrCreateContext(overrideHeadless);
+    const session = new BrowserSession(sessionId, this.sharedContextManager, this.authManager, targetUrl);
+    await session.init({ allowUnauthenticated: true });
+    this.sessions.set(sessionId, session);
+    return session;
+  }
+
+  /**
    * Get existing session or create a new one
    *
    * @param sessionId Optional session ID to reuse existing session

@@ -71,14 +71,15 @@ Ask a question against a notebook. Reuses an existing browser session when `sess
 
 ## add_source — new in v2
 
-Add a source to a notebook. v2 supports `type=url` (web crawl) and `type=text` (paste). File / YouTube / Drive uploads are not supported.
+Add a source to a notebook. v2 supports `type=url` (web crawl), `type=text` (paste), and `type=file` for local PDF/PPT/PPTX uploads through the authenticated browser UI.
 
 ### Parameters
 
 | Name | Type | Required | Notes |
 |---|---|---|---|
-| `type` | `url` \| `text` | yes | |
-| `content` | string | yes | URL when `type=url`, raw text when `type=text`. |
+| `type` | `url` \\| `text` \\| `file` | yes | |
+| `content` | string | conditional | URL when `type=url`, raw text when `type=text`. |
+| `file_path` | string | conditional | Absolute local PDF/PPT/PPTX path when `type=file`. |
 | `title` | string | no | Optional display title. NotebookLM picks a default. |
 | `session_id` | string | no | Reuse an existing browser session. |
 | `notebook_id` | string | no | Library notebook ID. |
@@ -415,3 +416,22 @@ Workflow:
 | `notebooklm://metadata` | Deprecated. Use `notebooklm://library` instead. |
 
 The MCP server does not respond to `mcp://notebooklm` — that URI scheme never existed. Use `notebooklm://`.
+# Headless NotebookLM diagnostics
+
+The `create_notebook_debug_session`, `inspect_notebook_page`, `navigate_notebook_page`, `click_notebook_element`,
+and `type_notebook_element` tools provide a bounded headless browser surface.
+`create_notebook_debug_session` may inspect an unauthenticated Google sign-in
+redirect; the other tools operate on its returned `session_id`. They do not
+expose cookies/storage/input values, execute JavaScript, or navigate off the
+official `notebook.google.com` / `notebooklm.google.com` hosts.
+
+`inspect_notebook_page` returns a bounded body excerpt, title/URL, up to 100
+interactive element summaries, optional selector match counts, and (by default)
+a temporary screenshot path. Action timeouts are capped at 15 seconds and typed
+text at 10,000 characters. Missing sessions and page/action failures are
+returned as structured `status: "incomplete"` / `retryable` diagnostics.
+
+Session initialization now keeps a page available when authentication or the
+NotebookLM chat-input readiness selector is missing. This lets an agent inspect
+the actual redirect/DOM before retrying `add_source`; failed source ingestion
+also includes a credential-safe page diagnostic when one is available.

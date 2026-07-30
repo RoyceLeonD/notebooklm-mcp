@@ -203,7 +203,7 @@ All tools below are registered in v2.0.0 and visible under the `full` profile. S
 
 | Tool | Purpose |
 |---|---|
-| `add_source` | Add a source to a notebook. v2 supports `type=url` (web crawl) and `type=text` (paste). Returns source counts before/after. |
+| `add_source` | Add a source to a notebook. Supports `type=url`, `type=text`, and local `type=file` uploads for PDF/PPT/PPTX. Returns source counts before/after plus title verification. |
 | `generate_audio` | Generate an Audio Overview. Optional `custom_prompt`, `timeout_ms` (default 600 000 ms). |
 | `download_audio` | Save the most recent Audio Overview to `destination_dir`. Run `generate_audio` first if none exists. |
 | `create_studio_task` / `get_studio_task` | Persist and inspect local Studio task IDs. Slide-deck creation/status/download remains explicitly incomplete unless the live UI path is verified. |

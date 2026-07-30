@@ -73,6 +73,7 @@ The default flow is interactive — `setup_auth` opens a browser and the user si
 | Variable | Type | Default | Purpose |
 |---|---|---|---|
 | `NOTEBOOK_PROFILE_STRATEGY` | enum | `auto` | `auto` (isolate when base is locked), `single` (always base), `isolated` (always per-instance). |
+| `NOTEBOOK_CHROME_PROFILE_DIR` | path | `<dataDir>/chrome_profile` | Override the source Chrome profile directory. Combine with `NOTEBOOK_PROFILE_STRATEGY=isolated` and `NOTEBOOK_CLONE_PROFILE=true` to clone authenticated state without locking the source profile. |
 | `NOTEBOOK_CLONE_PROFILE` | bool | `false` | Clone the base profile into the isolated dir on first use. |
 | `NOTEBOOK_CLEANUP_ON_STARTUP` | bool | `true` | Clean stale isolated profiles on boot. |
 | `NOTEBOOK_CLEANUP_ON_SHUTDOWN` | bool | `true` | Clean isolated profiles on graceful shutdown. |

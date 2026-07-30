@@ -1,12 +1,9 @@
 /**
  * NotebookLM source ingestion (issue #25).
  *
- * v2.0.0 supports the two source types that cover the bulk of real usage:
- *   - `url`  — paste a website URL (NotebookLM crawls and indexes it)
- *   - `text` — paste raw text (treated as a copied document)
- *
- * File-upload, YouTube and Google-Drive ingestion are intentionally out of
- * scope for v2.0.0 — they require different overlay flows.
+ * v2.0.0 supports URL, text, and local PDF/PPT/PPTX file sources.
+ * YouTube and Google-Drive ingestion remain out of scope because they use
+ * different overlay flows.
  *
  * Robustness strategy (2026-05, ported from the Fork's content-manager.ts):
  *
@@ -32,12 +29,14 @@ import { Selectors, joinAlt } from "./selectors.js";
 import { safeSleep, isRecoverable } from "../browser/watchdog.js";
 import { log } from "../utils/logger.js";
 
-export type SourceType = "url" | "text";
+export type SourceType = "url" | "text" | "file";
 
 export interface AddSourceInput {
   type: SourceType;
   /** URL when `type === "url"`, raw text when `type === "text"`. */
-  content: string;
+  content?: string;
+  /** Absolute local PDF/PPT/PPTX path when `type === "file"`. */
+  filePath?: string;
   /** Optional title shown in the source list. NotebookLM uses a default if omitted. */
   title?: string;
 }
@@ -52,6 +51,8 @@ export interface AddSourceResult {
   retryable: boolean;
   nextSteps: string[];
   attempts: number;
+  sourceTitle?: string;
+  sourceIdentityVerified?: boolean;
 }
 
 export type SourceFailureClass =
@@ -71,7 +72,7 @@ export interface SourceFailureDiagnostic {
 export function classifySourceFailure(message: string, type: SourceType): SourceFailureDiagnostic {
   const lower = message.toLowerCase();
   if (
-    /chat input|add.?source|source dialog|overlay|input field|notebook page has loaded/.test(lower)
+    /chat input|add.?source|source dialog|overlay|input field|native input|file.?upload|notebook page has loaded/.test(lower)
   ) {
     return {
       failureClass: "ui_not_ready",
@@ -149,12 +150,13 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
     // 1. Open the Add-source dialog (or use one that's already open).
     await openAddSourceOverlay(page);
 
-    // 2. Pick the source type if there is a picker. Some overlay variants
-    //    drop straight into an input field; pickSourceType is a no-op then.
+    // 2. File uploads use the native browser file chooser; URL/text use the
+    //    picker and textarea flow.
     await pickSourceType(page, input.type);
 
-    // 3. Fill the content + optional title.
-    await fillSourceContent(page, input);
+    // 3. Fill the content + optional title, or upload the local file.
+    if (input.type === "file") await uploadSourceFile(page, input);
+    else await fillSourceContent(page, input);
 
     // 4. Snapshot the source count *before* submitting. The Fork captures it
     //    here (dialog still open, sidebar list not yet updated) so the
@@ -196,6 +198,18 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
     const after = await waitForSourceCountIncrease(page, before, 90_000);
 
     if (after > before) {
+      const sourceTitle = sourceTitleForInput(input);
+      const sourceIdentityVerified = sourceTitle
+        ? await verifySourceIdentity(page, sourceTitle)
+        : true;
+      if (!sourceIdentityVerified) {
+        return {
+          ...failedResult(input.type, `Source count increased, but expected source title "${sourceTitle}" was not found in the source list.`, before),
+          sourceCountAfter: after,
+          sourceTitle,
+          sourceIdentityVerified: false,
+        };
+      }
       log.success(`  ✅ source added (count ${before} → ${after})`);
       return {
         success: true,
@@ -205,6 +219,8 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
         retryable: false,
         nextSteps: [],
         attempts: 1,
+        sourceTitle,
+        sourceIdentityVerified,
       };
     }
 
@@ -222,6 +238,48 @@ export async function addSource(page: Page, input: AddSourceInput): Promise<AddS
     log.warning(`  ⚠️  add_source failed: ${err}`);
     return failedResult(input.type, err instanceof Error ? err.message : String(err));
   }
+}
+
+const LOCAL_FILE_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx"]);
+
+export function sourceTitleForInput(input: AddSourceInput): string | undefined {
+  if (input.type !== "file") return undefined;
+  if (input.title?.trim()) return input.title.trim();
+  if (input.filePath) return input.filePath.split(/[\\\\/]/).pop();
+  return undefined;
+}
+
+export function validateFileInput(input: AddSourceInput): void {
+  if (input.type !== "file") return;
+  if (!input.filePath?.trim()) throw new Error("file source requires filePath");
+  const extension = input.filePath.toLowerCase().match(/\.[^.\\\\/]+$/)?.[0];
+  if (!extension || !LOCAL_FILE_EXTENSIONS.has(extension)) {
+    throw new Error("file source must be a PDF, PPT, or PPTX file");
+  }
+}
+
+async function uploadSourceFile(page: Page, input: AddSourceInput): Promise<void> {
+  validateFileInput(input);
+  const overlay = page.locator(Selectors.sources.overlayPane).first();
+  const fileInput = overlay.locator('input[type="file"]').first();
+  if (await fileInput.count().catch(() => 0)) {
+    await fileInput.setInputFiles(input.filePath!);
+    return;
+  }
+  // Do not automate an OS file picker. If the page does not expose the native
+  // input, return an explicit incomplete result rather than guessing.
+  throw new Error("NotebookLM did not expose a native input[type=file] control; safe file upload is incomplete for this UI variant");
+}
+
+async function verifySourceIdentity(page: Page, expectedTitle: string): Promise<boolean> {
+  const rows = page.locator(Selectors.sources.sourceContainer);
+  const expected = expectedTitle.trim().toLowerCase();
+  const count = await rows.count();
+  for (let index = 0; index < count; index += 1) {
+    const text = (await rows.nth(index).textContent().catch(() => null))?.trim().toLowerCase();
+    if (text === expected || text?.includes(expected)) return true;
+  }
+  return false;
 }
 
 /**
@@ -314,7 +372,11 @@ async function isOverlayVisible(page: Page): Promise<boolean> {
 
 async function pickSourceType(page: Page, type: SourceType): Promise<void> {
   const candidates =
-    type === "url" ? Selectors.sources.sourceTypeUrl : Selectors.sources.sourceTypeText;
+    type === "url"
+      ? Selectors.sources.sourceTypeUrl
+      : type === "file"
+        ? []
+        : Selectors.sources.sourceTypeText;
   const overlay = page.locator(Selectors.sources.overlayPane).first();
   for (const sel of candidates) {
     const target = overlay.locator(sel).first();
@@ -359,7 +421,7 @@ async function fillSourceContent(page: Page, input: AddSourceInput): Promise<voi
 
   // Title goes in a separate input when one is present; otherwise we prefix
   // it onto the text content (Fork's fallback for older overlays).
-  let body = input.content;
+  let body = input.content ?? "";
   if (input.title && input.type === "text") {
     let titleInputFound = false;
     const titleSelectors = [

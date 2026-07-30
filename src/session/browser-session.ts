@@ -46,6 +46,34 @@ import { log } from "../utils/logger.js";
 import type { SessionInfo, ProgressCallback } from "../types.js";
 import { RateLimitError } from "../errors.js";
 
+export interface NotebookPageInspection {
+  status: "success";
+  session_id: string;
+  url: string;
+  title: string;
+  body_excerpt: string;
+  interactive_elements: Array<{ tag: string; role?: string; aria_label?: string; text: string; disabled: boolean }>;
+  selector_matches: Record<string, number>;
+  screenshot_path?: string;
+}
+
+const MAX_DEBUG_TIMEOUT_MS = 15_000;
+const MAX_DEBUG_TEXT = 10_000;
+
+function boundedDebugTimeout(value?: number): number {
+  if (!Number.isFinite(value)) return 10_000;
+  return Math.max(250, Math.min(MAX_DEBUG_TIMEOUT_MS, Math.floor(value as number)));
+}
+
+function assertNotebookUrl(url: string): URL {
+  const parsed = new URL(url);
+  const allowedHosts = new Set(["notebook.google.com", "notebooklm.google.com"]);
+  if (parsed.protocol !== "https:" || !allowedHosts.has(parsed.hostname)) {
+    throw new Error("Navigation is restricted to official NotebookLM URLs");
+  }
+  return parsed;
+}
+
 export class BrowserSession {
   public readonly sessionId: string;
   public readonly notebookUrl: string;
@@ -79,7 +107,7 @@ export class BrowserSession {
   /**
    * Initialize the session by creating a page and navigating to the notebook
    */
-  async init(): Promise<void> {
+  async init(options: { allowUnauthenticated?: boolean } = {}): Promise<void> {
     if (this.initialized) {
       log.warning(`⚠️  Session ${this.sessionId} already initialized`);
       return;
@@ -119,13 +147,18 @@ export class BrowserSession {
       await randomDelay(2000, 3000);
 
       // Check if we need to login
-      const isAuthenticated = await this.authManager.validateCookiesExpiry(this.context);
+      const hasValidCookies = await this.authManager.validateCookiesExpiry(this.context);
+      const isAuthenticated = hasValidCookies && (await this.authManager.validatePageAuthentication(this.page));
 
       if (!isAuthenticated) {
         log.warning(`  🔑 Session ${this.sessionId} needs authentication`);
-        const loginSuccess = await this.ensureAuthenticated();
-        if (!loginSuccess) {
-          throw new Error("Failed to authenticate session");
+        if (options.allowUnauthenticated) {
+          log.warning(`  🧭 Debug session continuing without authentication`);
+        } else {
+          const loginSuccess = await this.ensureAuthenticated();
+          if (!loginSuccess) {
+            throw new Error("Failed to authenticate session");
+          }
         }
       } else {
         log.success(`  ✅ Session already authenticated`);
@@ -146,9 +179,14 @@ export class BrowserSession {
         log.info(`  ℹ️  No saved sessionStorage found (fresh session)`);
       }
 
-      // Wait for NotebookLM interface to load
+      // Wait for NotebookLM interface to load. Keep the page available when
+      // NotebookLM has changed its DOM so headless diagnostics can inspect it.
       log.info(`  ⏳ Waiting for NotebookLM interface...`);
-      await this.waitForNotebookLMReady();
+      try {
+        await this.waitForNotebookLMReady();
+      } catch (error) {
+        log.warning(`⚠️  NotebookLM readiness check incomplete: ${error}`);
+      }
 
       this.initialized = true;
       this.updateActivity();
@@ -887,6 +925,62 @@ export class BrowserSession {
       message_count: this.messageCount,
       notebook_url: this.notebookUrl,
     };
+  }
+
+  /** Return bounded, credential-safe state from the current page. */
+  async inspectPage(options: { selectors?: string[]; screenshot?: boolean } = {}): Promise<NotebookPageInspection> {
+    if (!this.page || this.isPageClosedSafe()) throw new Error("Notebook session page is unavailable");
+    const page = this.page;
+    const requested = (options.selectors ?? []).slice(0, 32).map((s) => s.slice(0, 500));
+    const selectorMatches: Record<string, number> = {};
+    for (const css of requested) {
+      try { selectorMatches[css] = await page.locator(css).count(); } catch { selectorMatches[css] = -1; }
+    }
+    const interactive = await page.evaluate(() => Array.from(document.querySelectorAll("button, a, input, textarea, select, [role]"))
+      .slice(0, 100)
+      .map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        role: element.getAttribute("role") || undefined,
+        aria_label: element.getAttribute("aria-label") || undefined,
+        text: (element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160),
+        disabled: (element as HTMLButtonElement | HTMLInputElement).disabled === true || element.hasAttribute("disabled"),
+      })));
+    const body = (await page.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    const result: NotebookPageInspection = {
+      status: "success", session_id: this.sessionId, url: page.url(),
+      title: await page.title().catch(() => ""), body_excerpt: body.slice(0, 8_000),
+      interactive_elements: interactive, selector_matches: selectorMatches,
+    };
+    if (options.screenshot !== false) {
+      result.screenshot_path = `/tmp/notebooklm-debug-${this.sessionId}-${Date.now()}.png`;
+      await page.screenshot({ path: result.screenshot_path, fullPage: false });
+    }
+    this.updateActivity();
+    return result;
+  }
+
+  async navigatePage(url: string): Promise<{ status: "success"; session_id: string; url: string; title: string }> {
+    if (!this.page || this.isPageClosedSafe()) throw new Error("Notebook session page is unavailable");
+    await this.page.goto(assertNotebookUrl(url).toString(), { waitUntil: "domcontentloaded", timeout: CONFIG.browserTimeout });
+    this.updateActivity();
+    return { status: "success", session_id: this.sessionId, url: this.page.url(), title: await this.page.title().catch(() => "") };
+  }
+
+  async clickElement(selector: string, timeoutMs?: number): Promise<{ status: "success"; session_id: string; selector: string }> {
+    if (!this.page || this.isPageClosedSafe()) throw new Error("Notebook session page is unavailable");
+    if (!selector.trim() || selector.length > 500) throw new Error("selector must be 1–500 characters");
+    await this.page.locator(selector).first().click({ timeout: boundedDebugTimeout(timeoutMs) });
+    this.updateActivity();
+    return { status: "success", session_id: this.sessionId, selector };
+  }
+
+  async typeElement(selector: string, text: string, timeoutMs?: number): Promise<{ status: "success"; session_id: string; selector: string; characters: number }> {
+    if (!this.page || this.isPageClosedSafe()) throw new Error("Notebook session page is unavailable");
+    if (!selector.trim() || selector.length > 500) throw new Error("selector must be 1–500 characters");
+    if (text.length > MAX_DEBUG_TEXT) throw new Error(`text exceeds ${MAX_DEBUG_TEXT} character limit`);
+    await this.page.locator(selector).first().fill(text, { timeout: boundedDebugTimeout(timeoutMs) });
+    this.updateActivity();
+    return { status: "success", session_id: this.sessionId, selector, characters: text.length };
   }
 
   /**

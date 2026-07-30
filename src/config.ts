@@ -126,7 +126,7 @@ const DEFAULTS: Config = {
   configDir: paths.config,
   dataDir: paths.data,
   browserStateDir: path.join(paths.data, "browser_state"),
-  chromeProfileDir: path.join(paths.data, "chrome_profile"),
+  chromeProfileDir: process.env.NOTEBOOK_CHROME_PROFILE_DIR || path.join(paths.data, "chrome_profile"),
   chromeInstancesDir: path.join(paths.data, "chrome_profile_instances"),
 
   // Library Configuration

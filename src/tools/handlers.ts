@@ -13,7 +13,7 @@ import type {
   NotebookEntry,
   UpdateNotebookInput,
 } from "../library/types.js";
-import type { AddSourceResult } from "../notebooklm/sources.js";
+import type { BrowserSession } from "../session/browser-session.js";
 import type { AudioGenerationResult, DownloadAudioResult } from "../notebooklm/audio.js";
 import { CONFIG, applyBrowserOptions, type BrowserOptions } from "../config.js";
 import { log } from "../utils/logger.js";
@@ -227,6 +227,49 @@ export class ToolHandlers {
         error: errorMessage,
       };
     }
+  }
+
+  /**
+   * Create a headless debug session, even when authentication is missing.
+   */
+  async handleCreateNotebookDebugSession(args: { notebook_url?: string; show_browser?: boolean }): Promise<ToolResult> {
+    try {
+      const session = await this.sessionManager.getOrCreateDebugSession(undefined, args.notebook_url, args.show_browser);
+      return { success: true, data: await session.inspectPage({ screenshot: true }) };
+    } catch (error) {
+      return { success: false, data: { status: "incomplete", retryable: true, message: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  /**
+   * Headless, existing-session-only NotebookLM diagnostics and bounded actions.
+   */
+  async handleInspectNotebookPage(args: { session_id: string; selectors?: string[]; screenshot?: boolean }): Promise<ToolResult> {
+    const session = this.sessionManager.getSession(args.session_id);
+    if (!session) return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: "Existing session not found; call list_sessions and use an authenticated session id." } };
+    try { return { success: true, data: await session.inspectPage({ selectors: args.selectors, screenshot: args.screenshot }) }; }
+    catch (error) { return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: error instanceof Error ? error.message : String(error) } }; }
+  }
+
+  async handleNavigateNotebookPage(args: { session_id: string; url: string }): Promise<ToolResult> {
+    const session = this.sessionManager.getSession(args.session_id);
+    if (!session) return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: "Existing session not found." } };
+    try { return { success: true, data: await session.navigatePage(args.url) }; }
+    catch (error) { return { success: false, data: { status: "incomplete", retryable: false, session_id: args.session_id, message: error instanceof Error ? error.message : String(error) } }; }
+  }
+
+  async handleClickNotebookElement(args: { session_id: string; selector: string; timeout_ms?: number }): Promise<ToolResult> {
+    const session = this.sessionManager.getSession(args.session_id);
+    if (!session) return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: "Existing session not found." } };
+    try { return { success: true, data: await session.clickElement(args.selector, args.timeout_ms) }; }
+    catch (error) { return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: error instanceof Error ? error.message : String(error) } }; }
+  }
+
+  async handleTypeNotebookElement(args: { session_id: string; selector: string; text: string; timeout_ms?: number }): Promise<ToolResult> {
+    const session = this.sessionManager.getSession(args.session_id);
+    if (!session) return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: "Existing session not found." } };
+    try { return { success: true, data: await session.typeElement(args.selector, args.text, args.timeout_ms) }; }
+    catch (error) { return { success: false, data: { status: "incomplete", retryable: true, session_id: args.session_id, message: error instanceof Error ? error.message : String(error) } }; }
   }
 
   /**
@@ -974,14 +1017,15 @@ export class ToolHandlers {
    * Handle add_source tool (issue #25).
    */
   async handleAddSource(args: {
-    type: "url" | "text";
-    content: string;
+    type: "url" | "text" | "file";
+    content?: string;
+    file_path?: string;
     title?: string;
     session_id?: string;
     notebook_id?: string;
     notebook_url?: string;
     show_browser?: boolean;
-  }): Promise<ToolResult<{ result: AddSourceResult }>> {
+  }): Promise<ToolResult> {
     log.info(`🔧 [TOOL] add_source called (type=${args.type})`);
     const originalConfig = { ...CONFIG };
     if (args.show_browser !== undefined) {
@@ -989,9 +1033,10 @@ export class ToolHandlers {
       Object.assign(CONFIG, effectiveConfig);
     }
     const overrideHeadless = args.show_browser === undefined ? undefined : args.show_browser;
+    let session: BrowserSession | undefined;
     try {
       const url = await this.resolveNotebookUrl(args.notebook_id, args.notebook_url);
-      const session = await this.sessionManager.getOrCreateSession(
+      session = await this.sessionManager.getOrCreateSession(
         args.session_id,
         url,
         overrideHeadless
@@ -999,13 +1044,22 @@ export class ToolHandlers {
       const result = await session.addSource({
         type: args.type,
         content: args.content,
+        filePath: args.file_path,
         title: args.title,
       });
       return { success: result.success, data: { result } };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       log.error(`❌ [TOOL] add_source failed: ${msg}`);
-      return { success: false, error: msg };
+      let pageDiagnostics: unknown;
+      if (session) {
+        try { pageDiagnostics = await session.inspectPage({ screenshot: false }); } catch { /* preserve original failure */ }
+      }
+      return {
+        success: false,
+        error: msg,
+        data: { status: "incomplete", retryable: true, message: msg, page_diagnostics: pageDiagnostics },
+      };
     } finally {
       Object.assign(CONFIG, originalConfig);
     }
